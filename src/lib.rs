@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::fmt::Debug;
 
 pub trait ExactCover
@@ -9,107 +8,7 @@ pub trait ExactCover
     fn exact_cover_num_cols(&self) -> usize;
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct SudokuClue {
-    pub row: u8,
-    pub col: u8,
-    pub num: u8,
-}
-
-#[derive(Clone, Debug)]
-pub struct SudokuPuzzle {
-    clues: Vec<SudokuClue>,
-    size: usize,
-    covered_cols: HashSet<usize>,
-}
-
-impl SudokuPuzzle {
-    pub fn new<C>(clues: C, size: usize) -> SudokuPuzzle
-    where
-        C: IntoIterator<Item = SudokuClue>,
-    {
-        if (size as f64).sqrt().fract() >= 1e-10 {
-            panic!("size {} not a square number", size)
-        }
-
-        // most sudoku puzzles have less than half the spaces filled
-        let mut clue_vec = Vec::with_capacity(size*size / 2);
-        let mut covered_cols = HashSet::with_capacity(size*size / 2);
-
-        // validate puzzle clues and pre-compute covered_cols
-        for clue in clues {
-            if clue.row as usize >= size || clue.col as usize >= size || clue.num as usize >= size {
-                panic!("clue outside bounds of {}x{} sudoku: {:?}", size, size, clue);
-            }
-            for &cols in &SudokuPuzzle::ec_cols(&clue, size) {
-                if !covered_cols.insert(cols) {
-                    panic!("conflict with previous clues: {:?}", clue);
-                }
-            }
-            clue_vec.push(clue)
-        }
-
-        SudokuPuzzle {
-            clues: clue_vec,
-            size,
-            covered_cols,
-        }
-    }
-
-    fn ec_cols(clue: &SudokuClue, size: usize) -> Vec<usize> {
-        vec![
-            SudokuPuzzle::xy_col(clue, size),
-            SudokuPuzzle::xn_col(clue, size),
-            SudokuPuzzle::yn_col(clue, size),
-            SudokuPuzzle::boxn_col(clue, size),
-        ]
-    }
-
-    fn xy_col(clue: &SudokuClue, size: usize) -> usize {
-        clue.row as usize + clue.col as usize * size
-    }
-
-    fn xn_col(clue: &SudokuClue, size: usize) -> usize {
-        size*size + clue.num as usize + clue.row as usize * size
-    }
-
-    fn yn_col(clue: &SudokuClue, size: usize) -> usize {
-        size*size*2 + clue.num as usize + clue.col as usize * size
-    }
-
-    fn boxn_col(clue: &SudokuClue, size: usize) -> usize {
-        size*size*3 + clue.num as usize + SudokuPuzzle::box_idx(clue, size)*size
-    }
-
-    fn box_idx(clue: &SudokuClue, size: usize) -> usize {
-        let box_size = (size as f64).sqrt().trunc() as usize;
-        clue.row as usize / box_size + (clue.col as usize / box_size) * box_size
-    }
-}
-
-impl ExactCover for SudokuPuzzle {
-    type Label = SudokuClue;
-
-    fn exact_cover_rows<'a>(&'a self) -> Box<dyn Iterator<Item = (SudokuClue, Vec<usize>)> + 'a> {
-        Box::new(
-            // iterate over all row,col,num combinations...
-            (0..self.size)
-            .flat_map(move |x| (0..self.size).map(move |y| (x,y)))
-            .flat_map(move |(x,y)| (0..self.size).map(move |n| SudokuClue {
-                row: x as u8,
-                col: y as u8,
-                num: n as u8}))
-            // ...map to exact cover columns with row label...
-            .map(move |clue| (clue, SudokuPuzzle::ec_cols(&clue, self.size)))
-            // ...and remove rows that are already covered by the given clues.
-            .filter(move |(_, ec_cols)| !ec_cols.iter().any(|col| self.covered_cols.contains(col)))
-            )
-    }
-
-    fn exact_cover_num_cols(&self) -> usize {
-        self.size*self.size*4
-    }
-}
+pub mod sudoku;
 
 #[derive(Default, Clone, Copy, Debug)]
 struct Node {
@@ -272,15 +171,18 @@ where
         self.node_list[header_node.r].l = header_idx;
     }
 
-    pub fn print_solutions(&mut self) {
-        let mut soln_vec = vec![];
-        self.search(&mut soln_vec, 0);
+    pub fn solve(&mut self) -> Vec<Vec<L>> {
+        let mut partial_soln = vec![];
+        let mut solution_list = vec![];
+        self.search(&mut partial_soln, 0, &mut solution_list);
+        solution_list.iter().map(|solution| solution.iter().map(|&idx| {
+            self.row_labels[self.node_list[idx].data]
+        }).collect()).collect()
     }
 
-    fn search(&mut self, partial_soln: &mut Vec<usize>, k: usize) {
+    fn search(&mut self, partial_soln: &mut Vec<usize>, k: usize, solution_list: &mut Vec<Vec<usize>>) {
         if self.node_list[0].r == 0 {
-            println!("** found solution! **");
-            println!("{:#?}", partial_soln.iter().map(|&idx| self.row_labels[self.node_list[idx].data]).collect::<Vec<L>>());
+            solution_list.push(partial_soln.clone());
             return;
         }
         
@@ -294,7 +196,7 @@ where
                 self.cover_col(self.node_list[j].col);
                 j = self.node_list[j].r;
             }
-            self.search(partial_soln, k+1);
+            self.search(partial_soln, k+1, solution_list);
             j = self.node_list[r].l;
             while j != r {
                 self.uncover_col(self.node_list[j].col);
@@ -327,6 +229,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::{HashSet, HashMap};
+    use crate::sudoku::*;
 
     struct TestEC {
         num_cols: usize,
@@ -352,7 +256,10 @@ mod tests {
             data: vec![vec![0,1], vec![1,2], vec![2,3], vec![3,4], vec![4,5], vec![0,5]],
         };
         let mut dl = DancingLinks::new(test_ec);
-        dl.print_solutions();
+        let solutions = dl.solve();
+        assert_eq!(solutions.len(), 2);
+        assert_eq!(solutions[0].len(), 3);
+        assert_eq!(solutions[1].len(), 3);
     }
 
     #[test]
@@ -362,13 +269,72 @@ mod tests {
         // ----+----
         // 3 . | 4 .
         // . 2 | . .
-        let sudoku = SudokuPuzzle::new(
-            [(0,2,0), (1,1,2), (1,3,3), (2,0,2), (2,2,3), (3,1,1)]
-                .iter().map(|(x,y,n)| SudokuClue{row:*x, col:*y, num:*n}),
-            4
-        );
+
+        let mut sudoku_clues: Vec<SudokuClue> = [(0,2,0), (1,1,2), (1,3,3), (2,0,2), (2,2,3), (3,1,1)]
+            .iter().map(|(x,y,n)| SudokuClue{row:*x, col:*y, num:*n}).collect();
+
+        let sudoku = SudokuPuzzle::new(sudoku_clues.iter().copied(), 4);
 
         let mut dl = DancingLinks::new(sudoku);
-        dl.print_solutions();
+        let solutions = dl.solve();
+        assert_eq!(solutions.len(), 1);
+        assert_eq!(solutions[0].len(), 10);
+
+        sudoku_clues.extend(solutions[0].iter());
+        assert_eq!(sudoku_clues.len(), 16);
+
+        let mut rows: HashMap<u8, HashSet<u8>> = HashMap::with_capacity(4);
+        let mut cols: HashMap<u8, HashSet<u8>> = HashMap::with_capacity(4);
+        let mut boxs: HashMap<u8, HashSet<u8>> = HashMap::with_capacity(4);
+
+        for clue in sudoku_clues {
+            rows.entry(clue.row)
+                .and_modify(|set: &mut HashSet<u8>| {
+                    if !set.insert(clue.num) {
+                        panic!("row conflict: {:?}", clue);
+                    }
+                })
+                .or_insert_with(|| {
+                    let mut set = HashSet::new();
+                    set.insert(clue.num);
+                    set
+                });
+
+            cols.entry(clue.col)
+                .and_modify(|set: &mut HashSet<u8>| {
+                    if !set.insert(clue.num) {
+                        panic!("col conflict: {:?}", clue);
+                    }
+                })
+                .or_insert_with(|| {
+                    let mut set = HashSet::new();
+                    set.insert(clue.num);
+                    set
+                });
+
+            let box_n = clue.row / 2 + (clue.col / 2) * 2;
+            boxs.entry(box_n)
+                .and_modify(|set: &mut HashSet<u8>| {
+                    if !set.insert(clue.num) {
+                        panic!("box conflict: {:?}", clue);
+                    }
+                })
+                .or_insert_with(|| {
+                    let mut set = HashSet::new();
+                    set.insert(clue.num);
+                    set
+                });
+        }
+
+        for map in &[rows, cols, boxs] {
+            let mut keys: Vec<u8> = map.keys().copied().collect();
+            keys.sort();
+            assert_eq!(keys, vec![0,1,2,3]);
+            for set in map.values() {
+                let mut nums: Vec<u8> = set.iter().copied().collect();
+                nums.sort();
+                assert_eq!(nums, vec![0,1,2,3]);
+            }
+        }
     }
 }
