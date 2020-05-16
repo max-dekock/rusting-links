@@ -97,14 +97,15 @@ where
         self.row_labels.push(label);
         let mut idx = self.node_list.len();
         let row_start = idx;
-        for (i, col) in row.iter().copied().enumerate() {
+        let row_len = row.len();
+        for (i, &col) in row.iter().enumerate() {
             if col >= self.num_cols {
                 panic!("row labeled {:?} exceeded column bounds: {}", label, col);
             }
             let header = self.header_index(col);
             let new_node = Node {
-                l: (i + row.len() - 1) % row.len() + row_start,
-                r: (i + row.len() + 1) % row.len() + row_start,
+                l: (i + row_len - 1) % row_len + row_start,
+                r: (i + row_len + 1) % row_len + row_start,
                 u: self.node_list[header].u,
                 d: header,
                 col: header,
@@ -229,8 +230,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::{HashSet, HashMap};
-    use crate::sudoku::*;
 
     struct TestEC {
         num_cols: usize,
@@ -260,81 +259,5 @@ mod tests {
         assert_eq!(solutions.len(), 2);
         assert_eq!(solutions[0].len(), 3);
         assert_eq!(solutions[1].len(), 3);
-    }
-
-    #[test]
-    fn test_sudoku() {
-        // . . | 1 .
-        // . 3 | . 4
-        // ----+----
-        // 3 . | 4 .
-        // . 2 | . .
-
-        let mut sudoku_clues: Vec<SudokuClue> = [(0,2,0), (1,1,2), (1,3,3), (2,0,2), (2,2,3), (3,1,1)]
-            .iter().map(|(x,y,n)| SudokuClue{row:*x, col:*y, num:*n}).collect();
-
-        let sudoku = SudokuPuzzle::new(sudoku_clues.iter().copied(), 4);
-
-        let mut dl = DancingLinks::new(sudoku);
-        let solutions = dl.solve();
-        assert_eq!(solutions.len(), 1);
-        assert_eq!(solutions[0].len(), 10);
-
-        sudoku_clues.extend(solutions[0].iter());
-        assert_eq!(sudoku_clues.len(), 16);
-
-        let mut rows: HashMap<u8, HashSet<u8>> = HashMap::with_capacity(4);
-        let mut cols: HashMap<u8, HashSet<u8>> = HashMap::with_capacity(4);
-        let mut boxs: HashMap<u8, HashSet<u8>> = HashMap::with_capacity(4);
-
-        for clue in sudoku_clues {
-            rows.entry(clue.row)
-                .and_modify(|set: &mut HashSet<u8>| {
-                    if !set.insert(clue.num) {
-                        panic!("row conflict: {:?}", clue);
-                    }
-                })
-                .or_insert_with(|| {
-                    let mut set = HashSet::new();
-                    set.insert(clue.num);
-                    set
-                });
-
-            cols.entry(clue.col)
-                .and_modify(|set: &mut HashSet<u8>| {
-                    if !set.insert(clue.num) {
-                        panic!("col conflict: {:?}", clue);
-                    }
-                })
-                .or_insert_with(|| {
-                    let mut set = HashSet::new();
-                    set.insert(clue.num);
-                    set
-                });
-
-            let box_n = clue.row / 2 + (clue.col / 2) * 2;
-            boxs.entry(box_n)
-                .and_modify(|set: &mut HashSet<u8>| {
-                    if !set.insert(clue.num) {
-                        panic!("box conflict: {:?}", clue);
-                    }
-                })
-                .or_insert_with(|| {
-                    let mut set = HashSet::new();
-                    set.insert(clue.num);
-                    set
-                });
-        }
-
-        for map in &[rows, cols, boxs] {
-            let mut keys: Vec<u8> = map.keys().copied().collect();
-            keys.sort();
-            assert_eq!(keys, vec![0,1,2,3]);
-            for set in map.values() {
-                let mut nums: Vec<u8> = set.iter().copied().collect();
-                nums.sort();
-                assert_eq!(nums, vec![0,1,2,3]);
-            }
-        }
     }
 }
